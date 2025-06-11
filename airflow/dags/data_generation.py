@@ -5,7 +5,7 @@ import sys
 import os
 import logging
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../scripts/')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../scripts/producer/')))
 
 def data_generation():
     try:
