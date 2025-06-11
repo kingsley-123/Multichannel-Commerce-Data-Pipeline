@@ -1,0 +1,119 @@
+# Python
+airflow/dags/__pycache__/
+airflow/logs/*
+airflow/plugins/*
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Docker
+.env
+docker-compose.override.yml
+
+# Airflow
+airflow/logs/*
+!airflow/logs/.gitkeep
+airflow/airflow.db
+airflow/airflow.cfg
+airflow/webserver_config.py
+
+# Data & Logs
+data/*
+!data/.gitkeep
+logs/
+*.log
+*.out
+
+# Spark
+spark-logs/
+spark-data/
+metastore_db/
+derby.log
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+
+# pytest
+.pytest_cache/
+.coverage
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Credentials & Secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+credentials.json
+config.json
+secrets/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Archives
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+
+# MinIO/Object Storage
+minio-data/
