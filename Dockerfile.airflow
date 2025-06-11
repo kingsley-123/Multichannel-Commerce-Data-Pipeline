@@ -1,0 +1,11 @@
+FROM apache/airflow:2.6.3
+
+# Install additional packages for fashion data pipeline
+RUN pip install \
+    kafka-python \
+    psycopg2-binary \
+    pandas \
+    requests \
+    sqlalchemy \
+    faker \
+    numpy
