@@ -218,6 +218,27 @@ services:
     restart: unless-stopped
     networks:
       - fashion-network
+  
+  kafka-producer-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.kafka-producer
+    container_name: fashion-kafka-producer-service
+    environment:
+      SILVER_DB_HOST: data-postgres
+      SILVER_DB_PORT: 5432
+      SILVER_DB_NAME: ${SILVER_DB_NAME:-fashion_silver}
+      SILVER_DB_USER: ${SILVER_DB_USER:-silver_user}
+      SILVER_DB_PASSWORD: ${SILVER_DB_PASSWORD:-silver_pass_2024}
+      KAFKA_BOOTSTRAP_SERVERS: broker:29092
+    depends_on:
+      data-postgres:
+        condition: service_healthy
+      broker:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - fashion-network
 
   # ===========================================
   # BRONZE LAYER - Raw Data Storage (MinIO)
