@@ -26,7 +26,7 @@ with DAG(
     dag_id="data_generation_dag",
     description="DAG for generating fashion data",
     default_args=default_args,
-    schedule_interval="*/30 * * * *",   # Every 30 minutes
+    schedule_interval="*/5 * * * *",   # Every 5 minutes
     catchup=False,
     max_active_runs=1
 ) as dag:
