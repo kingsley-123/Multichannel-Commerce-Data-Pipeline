@@ -240,6 +240,25 @@ services:
     networks:
       - fashion-network
 
+  kafka-consumer-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.kafka-consumer
+    container_name: fashion-kafka-consumer-service
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: broker:29092
+      MINIO_HOST: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-bronze_access_key}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-bronze_secret_key_2024}
+    depends_on:
+      broker:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - fashion-network
+
   # ===========================================
   # BRONZE LAYER - Raw Data Storage (MinIO)
   # ===========================================
@@ -576,6 +595,29 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  # Fashion Data Generator
+  fashion-data-generator:
+    build:
+      context: .
+      dockerfile: Dockerfile.raw-data-generator
+    container_name: fashion-raw-data-generator
+    environment:
+      # Silver Layer Database
+      SILVER_DB_HOST: data-postgres
+      SILVER_DB_PORT: 5432
+      SILVER_DB_NAME: ${SILVER_DB_NAME:-fashion_silver}
+      SILVER_DB_USER: ${SILVER_DB_USER:-silver_user}
+      SILVER_DB_PASSWORD: ${SILVER_DB_PASSWORD:-silver_pass_2024}
+      RUN_CONTINUOUSLY: 'true'
+      INTERVAL_SECONDS: 30
+    depends_on:
+      data-postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - fashion-network
+   
 
 volumes:
   # Data Layer Volumes
