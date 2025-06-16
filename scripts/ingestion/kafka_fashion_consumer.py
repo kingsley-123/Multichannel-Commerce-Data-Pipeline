@@ -68,8 +68,8 @@ def main():
                 }
             }
             
-            # Convert to JSON bytes
-            json_data = json.dumps(bronze_data, indent=2)
+            # FIXED: Convert to JSON bytes (single line for Spark compatibility)
+            json_data = json.dumps(bronze_data)  # NO INDENT - this is the key fix
             data_stream = io.BytesIO(json_data.encode('utf-8'))
             
             # Write to MinIO Bronze layer
