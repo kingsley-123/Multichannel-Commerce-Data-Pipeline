@@ -385,7 +385,7 @@ services:
     volumes:
       - clickhouse-data:/var/lib/clickhouse
       - clickhouse-logs:/var/log/clickhouse-server
-      - ./clickhouse-init.sql:/init.sql:ro
+      - ./clickhouse-init.sql:/docker-entrypoint-initdb.d/init.sql:ro  
     ulimits:
       nofile:
         soft: 262144
@@ -451,8 +451,8 @@ services:
     environment:
       - SPARK_MODE=worker
       - SPARK_MASTER_URL=spark://spark-master:7077
-      - SPARK_WORKER_MEMORY=2G
-      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_MEMORY=4G
+      - SPARK_WORKER_CORES=4
       - SPARK_RPC_AUTHENTICATION_ENABLED=no
       - SPARK_RPC_ENCRYPTION_ENABLED=no
       - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
@@ -469,7 +469,7 @@ services:
         condition: service_healthy
     networks:
       - fashion-network
-    restart: unless-stopped
+    restart: "no" 
 
   # Spark Worker 2
   spark-worker-2:
@@ -483,8 +483,8 @@ services:
     environment:
       - SPARK_MODE=worker
       - SPARK_MASTER_URL=spark://spark-master:7077
-      - SPARK_WORKER_MEMORY=2G
-      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_MEMORY=4G
+      - SPARK_WORKER_CORES=4
       - SPARK_RPC_AUTHENTICATION_ENABLED=no
       - SPARK_RPC_ENCRYPTION_ENABLED=no
       - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
@@ -501,7 +501,7 @@ services:
         condition: service_healthy
     networks:
       - fashion-network
-    restart: unless-stopped
+    restart: "no" 
 
   # ===========================================
   # ORCHESTRATION LAYER - Apache Airflow
@@ -691,6 +691,37 @@ services:
       - ./spark-data:/opt/spark-data
       - ./jars:/opt/spark/jars/extra
     restart: unless-stopped
+    networks:
+      - fashion-network
+
+  pipeline-orchestrator:
+    image: mcr.microsoft.com/powershell:7.4-ubuntu-22.04
+    container_name: fashion-pipeline-orchestrator
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./scripts:/scripts
+      - ./:/workspace
+    working_dir: /workspace
+    environment:
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    command: >
+      bash -c "
+      apt-get update && apt-get install -y docker-compose-plugin curl &&
+      echo 'Waiting for infrastructure to be ready...' &&
+      sleep 60 &&
+      echo 'Starting PowerShell pipeline...' &&
+      pwsh -File /scripts/streaming_pipeline.ps1
+      "
+    restart: unless-stopped
+    depends_on:
+      spark-master:
+        condition: service_healthy
+      silver-postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
     networks:
       - fashion-network
 
