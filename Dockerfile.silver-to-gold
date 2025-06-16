@@ -1,0 +1,16 @@
+FROM bitnami/spark:3.5.0
+
+USER 1001
+
+# Copy your CM tables script from scripts folder
+COPY scripts/ingestion/silver_to_gold.py /opt/spark-apps/
+
+# Change to 300 seconds (5 minutes) for Silver→Gold
+CMD while true; do \
+      echo "Running Silver to Gold processing..."; \
+      spark-submit --master spark://spark-master:7077 \
+      --jars /opt/spark/jars/extra/postgresql-42.6.0.jar,/opt/spark/jars/extra/clickhouse-jdbc-0.4.6-all.jar \
+      /opt/spark-apps/silver_to_gold.py; \
+      echo "Sleeping for 300 seconds (5 minutes)..."; \
+      sleep 300; \
+    done
