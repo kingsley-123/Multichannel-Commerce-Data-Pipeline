@@ -623,7 +623,25 @@ services:
     restart: unless-stopped
     networks:
       - fashion-network
-   
+
+  all-sources-streaming:
+    build:
+      context: .
+      dockerfile: Dockerfile.all-sources-streaming
+    container_name: fashion-all-sources-streaming
+    depends_on:
+    spark-master:
+      condition: service_healthy
+    data-postgres:
+      condition: service_healthy
+    minio:
+      condition: service_healthy
+    volumes:
+      - ./spark-data:/opt/spark-data
+      - ./jars:/opt/spark/jars/extra
+    restart: unless-stopped
+    networks:
+      - fashion-network
 
 volumes:
   # Data Layer Volumes
