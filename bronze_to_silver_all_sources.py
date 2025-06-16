@@ -22,7 +22,7 @@ def process_source(spark, source_name, table_name):
     checkpoint = get_checkpoint()
     
     # Read all data for this source
-    df = spark.read.json(f"s3a://fashion-bronze-raw/{source_name}/*/*/*.json") \
+    df = spark.read.json(f"s3a://fashion-bronze-raw/{source_name}/*/*/*/*.json") \
         .select("raw_api_data.*", "kafka_metadata.bronze_timestamp") \
         .filter(col("bronze_timestamp") > checkpoint)
     
@@ -84,7 +84,7 @@ def process_source(spark, source_name, table_name):
         .mode("append") \
         .save()
     
-    print(f"✅ Processed {clean_df.count()} {source_name} records")
+    print(f"Processed {clean_df.count()} {source_name} records")
     return clean_df
 
 # Start Spark
@@ -96,7 +96,7 @@ spark = SparkSession.builder \
     .config("spark.hadoop.fs.s3a.path.style.access", "true") \
     .getOrCreate()
 
-print("🚀 Processing all fashion data sources...")
+print("Processing all fashion data sources...")
 
 sources = [
     ("joor_orders", "silver_joor_orders"),
@@ -115,13 +115,13 @@ for source_name, table_name in sources:
             latest = result_df.select(spark_max("bronze_timestamp")).collect()[0][0]
             all_timestamps.append(latest)
     except Exception as e:
-        print(f"❌ Error processing {source_name}: {e}")
+        print(f"Error processing {source_name}: {e}")
 
 # Update checkpoint with latest timestamp across all sources
 if all_timestamps:
     newest_timestamp = max(all_timestamps)
     save_checkpoint(newest_timestamp)
-    print(f"✅ Updated checkpoint to: {newest_timestamp}")
+    print(f"Updated checkpoint to: {newest_timestamp}")
 
 spark.stop()
-print("🏁 All sources processed")
+print("All sources processed")

@@ -3,14 +3,14 @@ FROM bitnami/spark:3.5.0
 USER 1001
 
 # Copy your batch script
-COPY bronze_to_silver_batch_simple.py /opt/spark-apps/
+COPY bronze_to_silver_all_sources.py /opt/spark-apps/
 
 # Run every 60 seconds in a loop
 CMD while true; do \
       echo "Running batch processing..."; \
       spark-submit --master spark://spark-master:7077 \
       --jars /opt/spark/jars/extra/postgresql-42.6.0.jar \
-      /opt/spark-apps/bronze_to_silver_batch_simple.py; \
+      /opt/spark-apps/bronze_to_silver_all_sources.py; \
       echo "Sleeping for 60 seconds..."; \
       sleep 60; \
     done

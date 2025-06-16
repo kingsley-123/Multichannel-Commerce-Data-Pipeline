@@ -624,7 +624,7 @@ services:
     networks:
       - fashion-network
 
-  all-sources-streaming:
+  all-sources-batch:
     build:
       context: .
       dockerfile: Dockerfile.all-sources-batch
