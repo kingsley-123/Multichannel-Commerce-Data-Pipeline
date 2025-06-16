@@ -1,36 +1,41 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, coalesce, lit, max as spark_max
 from pyspark.sql.types import DoubleType, IntegerType
+from datetime import datetime, timedelta
 import os
 
-# Simple checkpoint
-CHECKPOINT_FILE = "/opt/spark-data/all_sources_checkpoint.txt"
+CHECKPOINT_DIR = "/opt/spark-data"
 
-def get_checkpoint():
-    if os.path.exists(CHECKPOINT_FILE):
-        return open(CHECKPOINT_FILE).read().strip()
+def get_checkpoint(source_name):
+    checkpoint_file = f"{CHECKPOINT_DIR}/{source_name}.txt"
+    if os.path.exists(checkpoint_file):
+        return open(checkpoint_file).read().strip()
     return "1900-01-01"
 
-def save_checkpoint(timestamp):
-    os.makedirs(os.path.dirname(CHECKPOINT_FILE), exist_ok=True)
-    open(CHECKPOINT_FILE, 'w').write(timestamp)
+def save_checkpoint(source_name, timestamp):
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    open(f"{CHECKPOINT_DIR}/{source_name}.txt", 'w').write(timestamp)
 
 def process_source(spark, source_name, table_name):
-    """Generic function to process any source"""
     print(f"Processing {source_name}...")
     
-    checkpoint = get_checkpoint()
+    checkpoint = get_checkpoint(source_name)
     
-    # Read all data for this source
-    df = spark.read.json(f"s3a://fashion-bronze-raw/{source_name}/*/*/*/*.json") \
-        .select("raw_api_data.*", "kafka_metadata.bronze_timestamp") \
-        .filter(col("bronze_timestamp") > checkpoint)
-    
-    if df.count() == 0:
-        print(f"No new {source_name} data")
+    try:
+        # Read all data, but filter efficiently by timestamp
+        df = spark.read.json(f"s3a://fashion-bronze-raw/{source_name}/*/*/*/*.json") \
+            .select("raw_api_data.*", "kafka_metadata.bronze_timestamp") \
+            .filter(col("bronze_timestamp") > checkpoint)
+        
+        if df.count() == 0:
+            print(f"No new {source_name} data")
+            return None
+            
+    except:
+        print(f"No data for {source_name}")
         return None
     
-    # Basic cleaning (adjust per source)
+    # Clean data
     if source_name == "joor_orders":
         clean_df = df.select(
             coalesce(col("order_id"), lit("")).alias("order_id"),
@@ -73,30 +78,32 @@ def process_source(spark, source_name, table_name):
             col("bronze_timestamp")
         )
     
-    # Save to PostgreSQL
+    # Save to dedicated Silver PostgreSQL
     clean_df.drop("bronze_timestamp").write \
         .format("jdbc") \
-        .option("url", "jdbc:postgresql://data-postgres:5432/fashion_silver") \
+        .option("url", "jdbc:postgresql://silver-postgres:5432/fashion_silver_dedicated") \
         .option("dbtable", table_name) \
-        .option("user", "silver_user") \
-        .option("password", "silver_pass_2024") \
+        .option("user", "silver_dedicated_user") \
+        .option("password", "silver_dedicated_pass_2024") \
         .option("driver", "org.postgresql.Driver") \
         .mode("append") \
         .save()
+    
+    # Update checkpoint
+    latest = clean_df.select(spark_max("bronze_timestamp")).collect()[0][0]
+    save_checkpoint(source_name, latest)
     
     print(f"Processed {clean_df.count()} {source_name} records")
     return clean_df
 
 # Start Spark
 spark = SparkSession.builder \
-    .appName("Fashion-All-Sources-Batch") \
+    .appName("Fashion-Simple-Optimized") \
     .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000") \
     .config("spark.hadoop.fs.s3a.access.key", "bronze_access_key") \
     .config("spark.hadoop.fs.s3a.secret.key", "bronze_secret_key_2024") \
     .config("spark.hadoop.fs.s3a.path.style.access", "true") \
     .getOrCreate()
-
-print("Processing all fashion data sources...")
 
 sources = [
     ("joor_orders", "silver_joor_orders"),
@@ -106,22 +113,10 @@ sources = [
     ("gsheets_data", "silver_gsheets_data")
 ]
 
-all_timestamps = []
-
 for source_name, table_name in sources:
     try:
-        result_df = process_source(spark, source_name, table_name)
-        if result_df:
-            latest = result_df.select(spark_max("bronze_timestamp")).collect()[0][0]
-            all_timestamps.append(latest)
+        process_source(spark, source_name, table_name)
     except Exception as e:
-        print(f"Error processing {source_name}: {e}")
-
-# Update checkpoint with latest timestamp across all sources
-if all_timestamps:
-    newest_timestamp = max(all_timestamps)
-    save_checkpoint(newest_timestamp)
-    print(f"Updated checkpoint to: {newest_timestamp}")
+        print(f"Error: {source_name} - {e}")
 
 spark.stop()
-print("All sources processed")
