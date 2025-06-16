@@ -627,8 +627,8 @@ services:
   all-sources-streaming:
     build:
       context: .
-      dockerfile: Dockerfile.all-sources-streaming
-    container_name: fashion-all-sources-streaming
+      dockerfile: Dockerfile.all-sources-batch
+    container_name: fashion-all-sources-batch
     depends_on:
       spark-master:
         condition: service_healthy
