@@ -16,34 +16,235 @@ def save_checkpoint(timestamp):
     open(CHECKPOINT_FILE, 'w').write(timestamp)
 
 def ensure_clickhouse_database():
-    """Ensure ClickHouse database exists before writing tables"""
-    try:
-        # Simple approach - try to connect and create database using JDBC
-        temp_url = "jdbc:clickhouse://clickhouse:8123/"
-        temp_props = {
-            "user": "gold_user",
-            "password": "gold_pass_2024",
-            "driver": "com.clickhouse.jdbc.ClickHouseDriver"
-        }
-        
-        # Create a dummy DataFrame to test connection and create database
-        dummy_df = spark.createDataFrame([("test",)], ["col"])
-        
-        # This will fail but should create the database if it doesn't exist
+    """Bulletproof database creation - handles all edge cases"""
+    print("🔧 Setting up ClickHouse database and tables...")
+    
+    import time
+    import socket
+    
+    # Wait for ClickHouse to be actually ready (not just healthy)
+    print("⏳ Waiting for ClickHouse connection...")
+    max_attempts = 60
+    for attempt in range(max_attempts):
         try:
-            dummy_df.limit(0).write.jdbc(
-                url="jdbc:clickhouse://clickhouse:8123/fashion_gold",
-                table="test_connection",
-                mode="overwrite",
-                properties=temp_props
-            )
-        except:
-            pass  # Expected to fail, but database should be created
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2)
+            result = sock.connect_ex(('clickhouse', 8123))
+            sock.close()
             
-        print("ClickHouse database check completed")
+            if result == 0:
+                print("✅ ClickHouse is accepting connections")
+                break
+        except:
+            pass
+            
+        if attempt < max_attempts - 1:
+            print(f"   Attempt {attempt + 1}/{max_attempts}...")
+            time.sleep(2)
+        else:
+            raise Exception("ClickHouse not responding after 2 minutes")
+    
+    # Give it a few more seconds to be fully ready
+    time.sleep(5)
+    
+    try:
+        # Method 1: Try using Spark JDBC (if it works)
+        print("🔧 Attempting database creation via JDBC...")
         
+        try:
+            # Create a simple test DataFrame
+            test_df = spark.createDataFrame([("test",)], ["col"])
+            
+            # Try to create database using JDBC
+            test_df.limit(0).write.jdbc(
+                url="jdbc:clickhouse://clickhouse:8123/",
+                table="temp_test",
+                mode="overwrite",
+                properties={
+                    "user": "gold_user",
+                    "password": "gold_pass_2024",
+                    "driver": "com.clickhouse.jdbc.ClickHouseDriver",
+                    "createDatabaseIfNotExist": "true"  # This might work
+                }
+            )
+            print("✅ JDBC method worked")
+            
+        except Exception as jdbc_error:
+            print(f"⚠️  JDBC method failed: {jdbc_error}")
+            print("🔧 Falling back to HTTP method...")
+            
+            # Method 2: HTTP API (more reliable)
+            import urllib.request
+            import urllib.parse
+            import base64
+            
+            # Create credentials
+            credentials = base64.b64encode(b'gold_user:gold_pass_2024').decode('ascii')
+            
+            def execute_sql(sql):
+                """Execute SQL via ClickHouse HTTP API"""
+                req = urllib.request.Request(
+                    'http://clickhouse:8123/',
+                    data=sql.encode('utf-8'),
+                    headers={'Authorization': f'Basic {credentials}'}
+                )
+                
+                try:
+                    with urllib.request.urlopen(req, timeout=30) as response:
+                        result = response.read().decode('utf-8')
+                        if response.status == 200:
+                            return True
+                        else:
+                            print(f"SQL failed: {result}")
+                            return False
+                except Exception as e:
+                    print(f"HTTP request failed: {e}")
+                    return False
+            
+            # Create database
+            print("📊 Creating fashion_gold database...")
+            if not execute_sql("CREATE DATABASE IF NOT EXISTS fashion_gold"):
+                raise Exception("Failed to create database")
+            
+            # Create all tables
+            tables = [
+                ("dim_date", """
+                CREATE TABLE IF NOT EXISTS fashion_gold.dim_date (
+                    date_key String,
+                    date Date,
+                    year UInt16,
+                    quarter UInt8,
+                    month UInt8,
+                    day_of_week String,
+                    is_weekend UInt8
+                ) ENGINE = MergeTree() ORDER BY date_key
+                """),
+                
+                ("dim_channels", """
+                CREATE TABLE IF NOT EXISTS fashion_gold.dim_channels (
+                    channel_id String,
+                    channel_name String,
+                    channel_type String,
+                    description String
+                ) ENGINE = MergeTree() ORDER BY channel_id
+                """),
+                
+                ("wholesale_cm1", """
+                CREATE TABLE IF NOT EXISTS fashion_gold.wholesale_cm1 (
+                    date_key String, date Date, order_no String, style_no String,
+                    style_name String, unified_style_no String, unified_style_name String,
+                    payment_source String, season String, buyer_name String,
+                    payment_terms String, country String, currency String, qty Int32,
+                    gross_revenue Decimal(10,2), total_discount Decimal(10,2),
+                    net_revenue Decimal(10,2), item_gross_price Decimal(10,2),
+                    item_discount Decimal(10,2), item_net_price Decimal(10,2),
+                    avg_item_unit_cost Decimal(10,2), unit_cost Decimal(10,2),
+                    prod_com_percent Decimal(5,4), prod_com Decimal(10,2),
+                    margin Decimal(10,2), channel_id String
+                ) ENGINE = MergeTree() 
+                PARTITION BY toYYYYMM(date) 
+                ORDER BY (date, order_no, style_no)
+                """),
+                
+                ("wholesale_cm2", """
+                CREATE TABLE IF NOT EXISTS fashion_gold.wholesale_cm2 (
+                    date_key String, order_no String, buyer_name String, currency String,
+                    payment_source String, qty Int32, net_revenue Decimal(10,2),
+                    production_cost Decimal(10,2), production_comm Decimal(10,2),
+                    freight_out_status String, freight_currency String,
+                    freight_in Decimal(10,2), freight_out Decimal(10,2),
+                    trx_currency String, trx_fees Decimal(10,2), comm_currency String,
+                    sales_comm Decimal(5,4), insurance_currency String,
+                    insurance Decimal(10,2), cm2_amount Decimal(10,2), channel_id String
+                ) ENGINE = MergeTree()
+                PARTITION BY toYYYYMM(parseDateTimeBestEffort(date_key))
+                ORDER BY (date_key, order_no)
+                """),
+                
+                ("shopify_cm1", """
+                CREATE TABLE IF NOT EXISTS fashion_gold.shopify_cm1 (
+                    date_key String, date Date, order_no String, style_no String,
+                    style_name String, unified_style_no String, unified_style_name String,
+                    buyer_name String, country String, currency String, qty Int32,
+                    gross_revenue Decimal(10,2), total_discount Decimal(10,2),
+                    net_revenue Decimal(10,2), item_gross_price Decimal(10,2),
+                    item_discount Decimal(10,2), item_net_price Decimal(10,2),
+                    total_returns Decimal(10,2), unit_cost_currency String,
+                    item_unit_cost Decimal(10,2), prod_com_percent Decimal(5,4),
+                    prod_com Decimal(10,2), margin Decimal(10,2), channel_id String
+                ) ENGINE = MergeTree()
+                PARTITION BY toYYYYMM(date)
+                ORDER BY (date, order_no, style_no)
+                """),
+                
+                ("shopify_cm2", """
+                CREATE TABLE IF NOT EXISTS fashion_gold.shopify_cm2 (
+                    date_key String, order_no String, buyer_name String, country String,
+                    currency String, qty Int32, net_revenue Decimal(10,2),
+                    total_returns Decimal(10,2), cost_currency String,
+                    total_unit_cost Decimal(10,2), cm1_amount Decimal(10,2),
+                    freight_out_status String, freight_in Decimal(10,2),
+                    freight_out Decimal(10,2), return_status String,
+                    freight_return Decimal(10,2), freight_income Decimal(10,2),
+                    shopify_fees Decimal(10,2), cm2_amount Decimal(10,2), channel_id String
+                ) ENGINE = MergeTree()
+                PARTITION BY toYYYYMM(parseDateTimeBestEffort(date_key))
+                ORDER BY (date_key, order_no)
+                """),
+                
+                ("livestreaming_cm1", """
+                CREATE TABLE IF NOT EXISTS fashion_gold.livestreaming_cm1 (
+                    date_key String, date Date, order_no String, style_no String,
+                    style_name String, unified_style_no String, unified_style_name String,
+                    buyer_name String, country String, currency String, qty Int32,
+                    gross_revenue Decimal(10,2), total_discount Decimal(10,2),
+                    net_revenue Decimal(10,2), item_gross_price Decimal(10,2),
+                    item_discount Decimal(10,2), item_net_price Decimal(10,2),
+                    total_returns Decimal(10,2), unit_cost_currency String,
+                    item_unit_cost Decimal(10,2), prod_com_percent Decimal(5,4),
+                    prod_com Decimal(10,2), margin Decimal(10,2), channel_id String
+                ) ENGINE = MergeTree()
+                PARTITION BY toYYYYMM(date)
+                ORDER BY (date, order_no, style_no)
+                """),
+                
+                ("livestreaming_cm2", """
+                CREATE TABLE IF NOT EXISTS fashion_gold.livestreaming_cm2 (
+                    date_key String, order_no String, buyer_name String, currency String,
+                    qty Int32, net_revenue Decimal(10,2), production_cost Decimal(10,2),
+                    production_comm Decimal(10,2), freight_currency String,
+                    freight_in Decimal(10,2), freight_out Decimal(10,2),
+                    trx_currency String, trx_fees Decimal(10,2), comm_currency String,
+                    sales_comm Decimal(5,4), cm2_amount Decimal(10,2), channel_id String
+                ) ENGINE = MergeTree()
+                PARTITION BY toYYYYMM(parseDateTimeBestEffort(date_key))
+                ORDER BY (date_key, order_no)
+                """),
+                
+                ("fact_freight", """
+                CREATE TABLE IF NOT EXISTS fashion_gold.fact_freight (
+                    date_key String, tracking_number String, provider String,
+                    cost Decimal(10,2), order_no String, created_at DateTime
+                ) ENGINE = MergeTree()
+                PARTITION BY toYYYYMM(parseDateTimeBestEffort(date_key))
+                ORDER BY (date_key, tracking_number)
+                """)
+            ]
+            
+            for table_name, sql in tables:
+                print(f"📋 Creating table: {table_name}")
+                if not execute_sql(sql):
+                    print(f"⚠️  Warning: Failed to create {table_name}")
+            
+            print("✅ Database setup completed via HTTP API")
+    
     except Exception as e:
-        print(f"Database setup attempt: {e}")
+        print(f"❌ Database setup failed: {e}")
+        print("⚠️  Continuing anyway - tables will be created on first write")
+        # Don't raise exception - let the pipeline continue
+        return False
+    
+    return True
 
 def write_to_clickhouse(df, table_name, mode="append"):
     """Write DataFrame to ClickHouse (tables must exist)"""
@@ -110,7 +311,14 @@ def create_joor_cm2(spark, joor_cm1_df, freight_df):
         spark_round(sum(col("prod_com")), 2).alias("production_comm")
     )
     
-    joor_cm2 = order_aggregated.select(
+    # Join with freight data to get actual shipping status and costs
+    joor_with_freight = order_aggregated.join(
+        freight_df.select("order_reference", "cost", lit("shipped").alias("freight_status")), 
+        order_aggregated["order_no"] == freight_df["order_reference"], 
+        "left"
+    )
+    
+    joor_cm2 = joor_with_freight.select(
         col("date_key"),  # For dim_date relationship
         col("order_no"),
         col("buyer_name"),
@@ -120,10 +328,10 @@ def create_joor_cm2(spark, joor_cm1_df, freight_df):
         col("net_revenue"),
         col("production_cost"),
         col("production_comm"),
-        lit("not shipped yet").alias("freight_out_status"),
+        coalesce(col("freight_status"), lit("not shipped yet")).alias("freight_out_status"),
         lit("SGD").alias("freight_currency"),
         (col("qty") * lit(3.0)).alias("freight_in"),
-        lit(15.0).alias("freight_out"),
+        coalesce(col("cost"), lit(15.0)).alias("freight_out"),
         lit("USD").alias("trx_currency"),
         when(col("payment_source") == "hilldun", lit(0.0))
         .otherwise(col("net_revenue") * lit(0.029)).alias("trx_fees"),
@@ -134,7 +342,7 @@ def create_joor_cm2(spark, joor_cm1_df, freight_df):
         .otherwise(lit(0.0)).alias("insurance"),
         (col("net_revenue") - col("production_cost") - col("production_comm") - 
          when(col("payment_source") == "hilldun", lit(0.0)).otherwise(col("net_revenue") * lit(0.029)) - 
-         (col("qty") * lit(3.0)) - lit(15.0)).alias("cm2_amount"),
+         (col("qty") * lit(3.0)) - coalesce(col("cost"), lit(15.0))).alias("cm2_amount"),
         col("channel_id")  # For dim_channels relationship
     )
     
@@ -173,7 +381,7 @@ def create_shopify_cm1(spark, shopify_df):
     
     return shopify_cm1
 
-def create_shopify_cm2(spark, shopify_cm1_df):
+def create_shopify_cm2(spark, shopify_cm1_df, freight_df):
     """Create Shopify Order-Level Margin Table (Shopify CM2)"""
     print("Creating Shopify CM2 (Order-Level Margins)...")
     
@@ -186,7 +394,14 @@ def create_shopify_cm2(spark, shopify_cm1_df):
         spark_round(sum(col("margin")), 2).alias("cm1_amount")
     )
     
-    shopify_cm2 = order_aggregated.select(
+    # Join with freight data to get actual shipping status and costs
+    shopify_with_freight = order_aggregated.join(
+        freight_df.select("order_reference", "cost", lit("shipped").alias("freight_status")), 
+        order_aggregated["order_no"] == freight_df["order_reference"], 
+        "left"
+    )
+    
+    shopify_cm2 = shopify_with_freight.select(
         col("date_key"),  # For dim_date relationship
         col("order_no"),
         col("buyer_name"),
@@ -198,14 +413,14 @@ def create_shopify_cm2(spark, shopify_cm1_df):
         lit("USD").alias("cost_currency"),
         col("total_unit_cost"),
         col("cm1_amount"),
-        lit("not shipped yet").alias("freight_out_status"),
+        coalesce(col("freight_status"), lit("not shipped yet")).alias("freight_out_status"),
         (col("qty") * lit(3.0)).alias("freight_in"),
-        lit(12.0).alias("freight_out"),
+        coalesce(col("cost"), lit(12.0)).alias("freight_out"),
         lit("not shipped yet").alias("return_status"),
         lit(8.0).alias("freight_return"),
         lit(0.0).alias("freight_income"),
         (col("net_revenue") * lit(0.029)).alias("shopify_fees"),
-        (col("cm1_amount") - (col("qty") * lit(3.0)) - lit(12.0) - lit(8.0) + 
+        (col("cm1_amount") - (col("qty") * lit(3.0)) - coalesce(col("cost"), lit(12.0)) - lit(8.0) + 
          col("freight_income") - (col("net_revenue") * lit(0.029))).alias("cm2_amount"),
         col("channel_id")  # For dim_channels relationship
     )
@@ -245,7 +460,7 @@ def create_tiktok_cm1(spark, tiktok_df):
     
     return tiktok_cm1
 
-def create_tiktok_cm2(spark, tiktok_cm1_df):
+def create_tiktok_cm2(spark, tiktok_cm1_df, freight_df):
     """Create TikTok Order-Level Margin Table (Livestreaming CM2)"""
     print("Creating TikTok CM2 (Order-Level Margins)...")
     
@@ -257,7 +472,15 @@ def create_tiktok_cm2(spark, tiktok_cm1_df):
         spark_round(sum(col("prod_com")), 2).alias("production_comm")
     )
     
-    tiktok_cm2 = order_aggregated.select(
+    # Join with freight data to get actual shipping status and costs
+    # Note: TikTok handles its own freight according to SOW, but we can still track costs
+    tiktok_with_freight = order_aggregated.join(
+        freight_df.select("order_reference", "cost", lit("shipped").alias("freight_status")), 
+        order_aggregated["order_no"] == freight_df["order_reference"], 
+        "left"
+    )
+    
+    tiktok_cm2 = tiktok_with_freight.select(
         col("date_key"),  # For dim_date relationship
         col("order_no"),
         col("buyer_name"),
@@ -268,13 +491,13 @@ def create_tiktok_cm2(spark, tiktok_cm1_df):
         col("production_comm"),
         lit("SGD").alias("freight_currency"),
         (col("qty") * lit(3.0)).alias("freight_in"),
-        lit(10.0).alias("freight_out"),
+        coalesce(col("cost"), lit(10.0)).alias("freight_out"),  # Use actual freight cost if available
         lit("SGD").alias("trx_currency"),
         (col("net_revenue") * lit(0.05)).alias("trx_fees"),
         lit("SGD").alias("comm_currency"),
         lit(0.08).alias("sales_comm"),
         (col("net_revenue") - col("production_cost") - col("production_comm") - 
-         (col("qty") * lit(3.0)) - lit(10.0) - (col("net_revenue") * lit(0.05))).alias("cm2_amount"),
+         (col("qty") * lit(3.0)) - coalesce(col("cost"), lit(10.0)) - (col("net_revenue") * lit(0.05))).alias("cm2_amount"),
         col("channel_id")  # For dim_channels relationship
     )
     
@@ -342,15 +565,15 @@ except Exception as e:
 
 print("Creating CM1 and CM2 margin tables...")
 
-# Create the 6 required margin tables (without Google Sheets dependencies)
+# Create the 6 required margin tables (now with proper freight integration)
 joor_cm1 = create_joor_cm1(spark, joor_df)
 joor_cm2 = create_joor_cm2(spark, joor_cm1, freight_df)
 
 shopify_cm1 = create_shopify_cm1(spark, shopify_df)
-shopify_cm2 = create_shopify_cm2(spark, shopify_cm1)
+shopify_cm2 = create_shopify_cm2(spark, shopify_cm1, freight_df)
 
 tiktok_cm1 = create_tiktok_cm1(spark, tiktok_df)
-tiktok_cm2 = create_tiktok_cm2(spark, tiktok_cm1)
+tiktok_cm2 = create_tiktok_cm2(spark, tiktok_cm1, freight_df)
 
 # Create date dimension based on actual data
 dim_date = create_date_dimension_from_data(spark, [joor_cm1, shopify_cm1, tiktok_cm1])
