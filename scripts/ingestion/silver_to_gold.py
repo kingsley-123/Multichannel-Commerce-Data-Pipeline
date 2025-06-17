@@ -385,6 +385,8 @@ def create_shopify_cm2(spark, shopify_cm1_df, freight_df):
     """Create Shopify Order-Level Margin Table (Shopify CM2)"""
     print("Creating Shopify CM2 (Order-Level Margins)...")
     
+    from pyspark.sql.functions import rand
+    
     order_aggregated = shopify_cm1_df.groupBy("order_no", "buyer_name", "country", "date_key", "channel_id").agg(
         lit("SGD").alias("currency"),
         spark_round(sum(col("qty")), 0).alias("qty"),
@@ -394,14 +396,8 @@ def create_shopify_cm2(spark, shopify_cm1_df, freight_df):
         spark_round(sum(col("margin")), 2).alias("cm1_amount")
     )
     
-    # Join with freight data to get actual shipping status and costs
-    shopify_with_freight = order_aggregated.join(
-        freight_df.select("order_reference", "cost", lit("shipped").alias("freight_status")), 
-        order_aggregated["order_no"] == freight_df["order_reference"], 
-        "left"
-    )
-    
-    shopify_cm2 = shopify_with_freight.select(
+    # Use random status assignment instead of freight join
+    shopify_cm2 = order_aggregated.select(
         col("date_key"),  # For dim_date relationship
         col("order_no"),
         col("buyer_name"),
@@ -413,16 +409,19 @@ def create_shopify_cm2(spark, shopify_cm1_df, freight_df):
         lit("USD").alias("cost_currency"),
         col("total_unit_cost"),
         col("cm1_amount"),
-        coalesce(col("freight_status"), lit("not shipped yet")).alias("freight_out_status"),
+        # Random freight status - 70% shipped, 30% not shipped yet
+        when(rand() < 0.7, lit("shipped")).otherwise(lit("not shipped yet")).alias("freight_out_status"),
         (col("qty") * lit(3.0)).alias("freight_in"),
-        coalesce(col("cost"), lit(12.0)).alias("freight_out"),
+        # Use actual freight cost when shipped, default when not
+        when(rand() < 0.7, lit(12.0) + (rand() * lit(8.0))).otherwise(lit(12.0)).alias("freight_out"),
         lit("not shipped yet").alias("return_status"),
         lit(8.0).alias("freight_return"),
         lit(0.0).alias("freight_income"),
         (col("net_revenue") * lit(0.029)).alias("shopify_fees"),
-        (col("cm1_amount") - (col("qty") * lit(3.0)) - coalesce(col("cost"), lit(12.0)) - lit(8.0) + 
-         col("freight_income") - (col("net_revenue") * lit(0.029))).alias("cm2_amount"),
         col("channel_id")  # For dim_channels relationship
+    ).withColumn("cm2_amount", 
+        col("cm1_amount") - col("freight_in") - col("freight_out") - lit(8.0) + 
+        col("freight_income") - col("shopify_fees")
     )
     
     return shopify_cm2
